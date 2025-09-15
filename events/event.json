@@ -1,18 +1,18 @@
 {
   "body": [
-    {
-      "cnpj": "12345",
-      "totalInvoicing": 50000,
-      "totalBalance": 4000,
-      "openingDate": "2020-01-01",
-      "cnae": "Agropecuaria"
+    {   
+      "ID": "CNPJ_00495",
+      "VL_FATU": 15000000,
+      "VL_SLDO": 5000,
+      "DT_ABRT": "2023-01-19",
+      "DS_CNAE": "Extração de minério de ferro"
     },
-    {
-      "cnpj": "67890",
-      "totalInvoicing": 150000,
-      "totalBalance": 10000,
-      "openingDate": "2018-05-10",
-      "cnae": "Comércio"
+    {   
+      "ID": "CNPJ_00787",
+      "VL_FATU": 300000,
+      "VL_SLDO": -20000000,
+      "DT_ABRT": "1990-06-15",
+      "DS_CNAE": "Telecomunicações sem fio"
     }
   ],
   "resource": "/classify",

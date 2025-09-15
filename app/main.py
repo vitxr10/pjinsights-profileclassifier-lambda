@@ -1,119 +1,99 @@
 import json
-import os
-import pickle
-import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import KMeans
+import os
 
-# Valor mínimo de saldo do treinamento (ajuste conforme seu dado real)
-MIN_SALDO_TRAIN = -85900900.0
+# === Configurações ===
+MIN_SALDO_TRAIN = -85900900.0  
 
-def load_pickle_models():
-    """Carrega o modelo KMeans e o scaler dos arquivos pickle."""
-    print("[LOG] Iniciando carregamento dos modelos pickle...")
-    try:
-        base_path = os.path.join(os.path.dirname(__file__), "pickle_files")
-        print(f"[LOG] Caminho base dos modelos: {base_path}")
-        with open(os.path.join(base_path, "kmeans_model_k4.pkl"), "rb") as f_model:
-            kmeans_model = pickle.load(f_model)
-        print("[LOG] Modelo KMeans carregado.")
-        with open(os.path.join(base_path, "scaler.pkl"), "rb") as f_scaler:
-            scaler = pickle.load(f_scaler)
-        print("[LOG] Scaler carregado.")
-        return kmeans_model, scaler
-    except Exception as e:
-        print(f"[ERRO] Falha ao carregar modelos: {e}")
-        raise RuntimeError(f"Erro ao carregar modelos: {e}")
+CLUSTER_TO_PROFILE = {
+    0: "expansao",
+    1: "inicio",
+    2: "declinio",
+    3: "maturidade"
+}
 
-def preprocess_input(data_list):
-    """Transforma a lista de objetos JSON em DataFrame e aplica as transformações necessárias."""
-    print("[LOG] Iniciando preprocessamento dos dados de entrada...")
-    try:
-        df = pd.DataFrame(data_list)
-        print(f"[LOG] DataFrame inicial: {df.shape}")
-        df = df.rename(columns={
-            "cnpj": "ID",
-            "totalInvoicing": "VL_FATU",
-            "totalBalance": "VL_SLDO",
-            "openingDate": "DT_ABRT",
-            "cnae": "DS_CNAE"
-        })
-        df["DT_ABRT"] = pd.to_datetime(df["DT_ABRT"])
-        df_transformed = df.copy()
-        df_transformed["VL_FATU_log"] = np.log1p(df_transformed["VL_FATU"])
-        df_transformed["VL_SLDO_shifted"] = df_transformed["VL_SLDO"] - MIN_SALDO_TRAIN + 1
-        df_transformed["VL_SLDO_log"] = np.log(df_transformed["VL_SLDO_shifted"])
-        features = df_transformed[["VL_FATU_log", "VL_SLDO_log"]]
-        print(f"[LOG] Features transformadas: {features.shape}")
-        return df, features
-    except Exception as e:
-        print(f"[ERRO] Falha no preprocessamento: {e}")
-        raise ValueError(f"Erro ao processar dados de entrada: {e}")
+# === Carregar parâmetros do scaler e do KMeans ===
+base_path = os.path.join(os.path.dirname(__file__), "params")
 
-def predict_profiles(kmeans_model, scaler, features, df_original):
-    """Aplica o scaler e o modelo para prever os clusters."""
-    print("[LOG] Iniciando predição dos perfis...")
-    try:
-        features_scaled = scaler.transform(features)
-        print(f"[LOG] Features escaladas: {features_scaled.shape}")
-        predicted_clusters = kmeans_model.predict(features_scaled)
-        print(f"[LOG] Clusters previstos: {predicted_clusters}")
-        df_original["profile"] = predicted_clusters
-        return df_original
-    except Exception as e:
-        print(f"[ERRO] Falha na predição: {e}")
-        raise RuntimeError(f"Erro ao realizar predição: {e}")
+with open(os.path.join(base_path, "scaler_params.json"), "r") as f:
+    scaler_params = json.load(f)
 
+with open(os.path.join(base_path, "kmeans_params.json"), "r") as f:
+    kmeans_params = json.load(f)
+
+# Transforma listas em arrays numpy
+scaler_mean_ = np.array(scaler_params["mean"])
+scaler_scale_ = np.array(scaler_params["scale"])
+kmeans_cluster_centers_ = np.array(kmeans_params["cluster_centers"])
+
+# === Funções utilitárias ===
+def preprocess_empresa(empresa: dict):
+    """Recebe uma empresa (dict) e gera os features transformados."""
+    vl_fatu = empresa["VL_FATU"]
+    vl_sldo = empresa["VL_SLDO"]
+
+    vl_fatu_log = np.log1p(vl_fatu)
+    vl_sldo_shifted = vl_sldo - MIN_SALDO_TRAIN + 1
+    vl_sldo_log = np.log(vl_sldo_shifted)
+
+    print(f"[LOG] Pré-processado: {empresa['ID']} -> VL_FATU_log: {vl_fatu_log:.2f}, VL_SLDO_log: {vl_sldo_log:.2f}")
+    return np.array([vl_fatu_log, vl_sldo_log])
+
+def scale_features(features: np.ndarray):
+    """Aplica a mesma transformação do StandardScaler."""
+    scaled = (features - scaler_mean_) / scaler_scale_
+    print(f"[LOG] Features escalados:\n{scaled}")
+    return scaled
+
+def predict_kmeans(features_scaled: np.ndarray):
+    """Predição manual do cluster mais próximo (distância euclidiana)."""
+    distances = np.linalg.norm(
+        features_scaled[:, np.newaxis, :] - kmeans_cluster_centers_,
+        axis=2
+    )
+    clusters = np.argmin(distances, axis=1)
+    print(f"[LOG] Clusters previstos: {clusters}")
+    return clusters
+
+# === Lambda Handler ===
 def lambda_handler(event, context):
-    print("[LOG] Lambda handler iniciado.")
+    print('[LOG] Iniciando lambda ProfileClassifier...')
+    print(f"[LOG] Evento recebido: {event}")
+
     try:
-        print(f"[LOG] Evento recebido: {event}")
-        # Recebe o body da requisição
-        body = event.get("body")
-        if body is None:
-            print("[ERRO] Body da requisição não encontrado.")
-            return {
-                "statusCode": 400,
-                "body": json.dumps({"error": "Body da requisição não encontrado."})
-            }
-        # Se vier como string, converte para lista de dicts
+        body = event["body"]
+
+        # Se body for string (API Gateway), faz o json.loads
         if isinstance(body, str):
-            data_list = json.loads(body)
-        else:
-            data_list = body
+            body = json.loads(body)
 
-        print(f"[LOG] Dados recebidos para classificação: {data_list}")
+        # Garantir que body é uma lista
+        if not isinstance(body, list):
+            body = [body]
 
-        # Carrega modelos
-        kmeans_model, scaler = load_pickle_models()
+        print(f"[LOG] Corpo da requisição processado: {body}")
 
-        # Preprocessa dados
-        df_original, features = preprocess_input(data_list)
+        # Pré-processa
+        features = np.array([preprocess_empresa(emp) for emp in body])
+        features_scaled = scale_features(features)
+        clusters = predict_kmeans(features_scaled)
 
-        # Predição
-        df_result = predict_profiles(kmeans_model, scaler, features, df_original)
+        # Montar resposta
+        response = []
+        for emp, cluster in zip(body, clusters):
+            emp_rotulado = emp.copy()
+            emp_rotulado["PERFIL"] = CLUSTER_TO_PROFILE[int(cluster)]
+            response.append(emp_rotulado)
 
-        # Monta resposta mantendo campos originais + profile
-        response_list = []
-        for _, row in df_result.iterrows():
-            response_list.append({
-                "cnpj": row["ID"],
-                "totalInvoicing": row["VL_FATU"],
-                "totalBalance": row["VL_SLDO"],
-                "openingDate": row["DT_ABRT"].strftime("%Y-%m-%d"),
-                "cnae": row["DS_CNAE"],
-                "profile": int(row["profile"])
-            })
+        print(f"[LOG] Corpo da resposta: {response}")
 
-        print(f"[LOG] Resposta gerada: {response_list}")
         return {
             "statusCode": 200,
-            "body": json.dumps(response_list)
+            "body": json.dumps(response, ensure_ascii=False)
         }
 
     except Exception as e:
-        print(f"[ERRO] Exceção no handler: {e}")
+        print(f"[ERROR] {str(e)}")
         return {
             "statusCode": 500,
             "body": json.dumps({"error": str(e)})
