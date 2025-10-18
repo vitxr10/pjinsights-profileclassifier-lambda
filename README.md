@@ -1,130 +1,115 @@
 # pjinsights-profileclassifier-lambda
 
-This project contains source code and supporting files for a serverless application that you can deploy with the SAM CLI. It includes the following files and folders.
+Descrição
+- Função AWS Lambda da plataforma PJInsights que classifica empresas em diferentes momentos de vida (início, declínio, expansão e maturidade) através de um modelo de Machine Learning não supervisionado, previamente treinado com o algoritmo K-means.
 
-- hello_world - Code for the application's Lambda function.
-- events - Invocation events that you can use to invoke the function.
-- tests - Unit tests for the application code. 
-- template.yaml - A template that defines the application's AWS resources.
+Visão geral do funcionamento
+- Função: classificar empresas em perfis (`expansao`, `inicio`, `declinio`, `maturidade`).
+- Implementação: pré-processamento local + escala (StandardScaler manual) + predição por distância euclidiana a centróides carregados de `app/params/kmeans_params.json`.
+- Handler: `app/main.py` -> `lambda_handler(event, context)`
 
-The application uses several AWS resources, including Lambda functions and an API Gateway API. These resources are defined in the `template.yaml` file in this project. You can update the template to add AWS resources through the same deployment process that updates your application code.
+Entrada esperada
+- O handler espera que `event` contenha a chave `body`. `body` pode ser um objeto JSON ou uma string JSON (como enviado pelo API Gateway). O corpo pode ser um objeto único ou uma lista de objetos.
+- Cada objeto deve conter as chaves (exatamente como no código):
+  - `ID` (identificador da empresa)
+  - `VL_FATU` (valor faturamento, número)
+  - `VL_SLDO` (valor saldo, número)
+  - `DT_ABRT` (data de abertura, string, ex.: "2023-01-19")
+  - `DS_CNAE` (descrição do CNAE, string)
 
-If you prefer to use an integrated development environment (IDE) to build and test your application, you can use the AWS Toolkit.  
-The AWS Toolkit is an open source plug-in for popular IDEs that uses the SAM CLI to build and deploy serverless applications on AWS. The AWS Toolkit also adds a simplified step-through debugging experience for Lambda function code. See the following links to get started.
-
-* [CLion](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [GoLand](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [IntelliJ](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [WebStorm](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [Rider](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [PhpStorm](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [PyCharm](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [RubyMine](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [DataGrip](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [VS Code](https://docs.aws.amazon.com/toolkit-for-vscode/latest/userguide/welcome.html)
-* [Visual Studio](https://docs.aws.amazon.com/toolkit-for-visual-studio/latest/user-guide/welcome.html)
-
-## Deploy the sample application
-
-The Serverless Application Model Command Line Interface (SAM CLI) is an extension of the AWS CLI that adds functionality for building and testing Lambda applications. It uses Docker to run your functions in an Amazon Linux environment that matches Lambda. It can also emulate your application's build environment and API.
-
-To use the SAM CLI, you need the following tools.
-
-* SAM CLI - [Install the SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-install.html)
-* [Python 3 installed](https://www.python.org/downloads/)
-* Docker - [Install Docker community edition](https://hub.docker.com/search/?type=edition&offering=community)
-
-To build and deploy your application for the first time, run the following in your shell:
-
-```bash
-sam build --use-container
-sam deploy --guided
+Exemplo completo de evento (igual ao `events/event.json`) — `body` contém uma lista de empresas:
+```json
+{
+  "body": [
+    {
+      "ID": "CNPJ_00495",
+      "VL_FATU": 15000000,
+      "VL_SLDO": 5000,
+      "DT_ABRT": "2023-01-19",
+      "DS_CNAE": "Extração de minério de ferro"
+    },
+    {
+      "ID": "CNPJ_00787",
+      "VL_FATU": 300000,
+      "VL_SLDO": -20000000,
+      "DT_ABRT": "1990-06-15",
+      "DS_CNAE": "Telecomunicações sem fio"
+    }
+  ],
+  "resource": "/classify",
+  "path": "/classify",
+  "httpMethod": "POST",
+  "isBase64Encoded": false,
+  "headers": { "Content-Type": "application/json" }
+}
 ```
 
-The first command will build the source of your application. The second command will package and deploy your application to AWS, with a series of prompts:
+Fluxo e pré-processamento
+1. O código carrega parâmetros de `app/params/scaler_params.json` e `app/params/kmeans_params.json` durante a inicialização.
+2. Para cada empresa, `preprocess_empresa` faz:
+   - `vl_fatu_log = log1p(VL_FATU)`
+   - `vl_sldo_shifted = VL_SLDO - MIN_SALDO_TRAIN + 1` (onde `MIN_SALDO_TRAIN = -85900900.0`)
+   - `vl_sldo_log = log(vl_sldo_shifted)`
+   - retorna vetor [vl_fatu_log, vl_sldo_log]
+3. `scale_features` aplica a transformação do tipo StandardScaler manual:
+   - scaled = (features - mean) / scale
+   - Os parâmetros carregados são (extraídos de `scaler_params.json`):
+     - mean = [15.881886000304164, 18.26364256074996]
+     - scale = [2.0720820939319053, 0.19892966368150952]
+4. `predict_kmeans` calcula distâncias euclidianas entre cada vetor escalado e os centróides carregados de `kmeans_params.json` e escolhe o índice do centróide mais próximo.
 
-* **Stack Name**: The name of the stack to deploy to CloudFormation. This should be unique to your account and region, and a good starting point would be something matching your project name.
-* **AWS Region**: The AWS region you want to deploy your app to.
-* **Confirm changes before deploy**: If set to yes, any change sets will be shown to you before execution for manual review. If set to no, the AWS SAM CLI will automatically deploy application changes.
-* **Allow SAM CLI IAM role creation**: Many AWS SAM templates, including this example, create AWS IAM roles required for the AWS Lambda function(s) included to access AWS services. By default, these are scoped down to minimum required permissions. To deploy an AWS CloudFormation stack which creates or modifies IAM roles, the `CAPABILITY_IAM` value for `capabilities` must be provided. If permission isn't provided through this prompt, to deploy this example you must explicitly pass `--capabilities CAPABILITY_IAM` to the `sam deploy` command.
-* **Save arguments to samconfig.toml**: If set to yes, your choices will be saved to a configuration file inside the project, so that in the future you can just re-run `sam deploy` without parameters to deploy changes to your application.
+Parâmetros do modelo (conteúdo de `app/params`)
+- `scaler_params.json`:
+```json
+{"mean": [15.881886000304164, 18.26364256074996], "scale": [2.0720820939319053, 0.19892966368150952]}
+```
+- `kmeans_params.json`:
+```json
+{"cluster_centers": [[0.05203342861682275, 0.025663951327768567], [-1.0468972428598908, 0.025448584525791827], [2.3322738925598343, -91.80954827325516], [1.5455672474480782, -0.049629341629874375]], "n_clusters": 4}
+```
+Observação: os `cluster_centers` devem estar na mesma escala aplicada aos features (ou seja, já no espaço escalado).
 
-You can find your API Gateway Endpoint URL in the output values displayed after deployment.
+Mapeamento de clusters → perfil
+- Definido em `app/main.py`:
+  - 0 → `expansao`
+  - 1 → `inicio`
+  - 2 → `declinio`
+  - 3 → `maturidade`
 
-## Use the SAM CLI to build and test locally
+Saída
+- Em caso de sucesso a Lambda retorna `statusCode: 200` e `body` com JSON string contendo uma lista de objetos correspondentes aos inputs, cada um com a chave nova `PERFIL` adicionada (valor em português).
 
-Build your application with the `sam build --use-container` command.
-
-```bash
-pjinsights-profileclassifier-lambda$ sam build --use-container
+Exemplo de resposta (body decodificado) — campos auxiliares são preservados:
+```json
+[
+  {
+    "ID": "CNPJ_00495",
+    "VL_FATU": 15000000,
+    "VL_SLDO": 5000,
+    "DT_ABRT": "2023-01-19",
+    "DS_CNAE": "Extração de minério de ferro",
+    "PERFIL": "expansao"
+  },
+  {
+    "ID": "CNPJ_00787",
+    "VL_FATU": 300000,
+    "VL_SLDO": -20000000,
+    "DT_ABRT": "1990-06-15",
+    "DS_CNAE": "Telecomunicações sem fio",
+    "PERFIL": "declinio"
+  }
+]
 ```
 
-The SAM CLI installs dependencies defined in `hello_world/requirements.txt`, creates a deployment package, and saves it in the `.aws-sam/build` folder.
+Erros
+- Em exceções a função retorna `statusCode: 500` e `body` com `{"error": "mensagem"}`.
 
-Test a single function by invoking it directly with a test event. An event is a JSON document that represents the input that the function receives from the event source. Test events are included in the `events` folder in this project.
+Implantação (SAM / template)
+- Template SAM (`template.yaml`) define a função:
+  - FunctionName: `ProfileClassifierLambda`
+  - Handler: `main.lambda_handler` (no diretório `app/`)
+  - Runtime: `python3.12`
+  - Evento HTTP: POST `/classify` (API Gateway)
 
-Run functions locally and invoke them with the `sam local invoke` command.
+- Para desenvolvimento local: `sam local invoke -e events/event.json` (ajuste o evento conforme o formato esperado).
 
-```bash
-pjinsights-profileclassifier-lambda$ sam local invoke HelloWorldFunction --event events/event.json
-```
-
-The SAM CLI can also emulate your application's API. Use the `sam local start-api` to run the API locally on port 3000.
-
-```bash
-pjinsights-profileclassifier-lambda$ sam local start-api
-pjinsights-profileclassifier-lambda$ curl http://localhost:3000/
-```
-
-The SAM CLI reads the application template to determine the API's routes and the functions that they invoke. The `Events` property on each function's definition includes the route and method for each path.
-
-```yaml
-      Events:
-        HelloWorld:
-          Type: Api
-          Properties:
-            Path: /hello
-            Method: get
-```
-
-## Add a resource to your application
-The application template uses AWS Serverless Application Model (AWS SAM) to define application resources. AWS SAM is an extension of AWS CloudFormation with a simpler syntax for configuring common serverless application resources such as functions, triggers, and APIs. For resources not included in [the SAM specification](https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md), you can use standard [AWS CloudFormation](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-template-resource-type-ref.html) resource types.
-
-## Fetch, tail, and filter Lambda function logs
-
-To simplify troubleshooting, SAM CLI has a command called `sam logs`. `sam logs` lets you fetch logs generated by your deployed Lambda function from the command line. In addition to printing the logs on the terminal, this command has several nifty features to help you quickly find the bug.
-
-`NOTE`: This command works for all AWS Lambda functions; not just the ones you deploy using SAM.
-
-```bash
-pjinsights-profileclassifier-lambda$ sam logs -n HelloWorldFunction --stack-name "pjinsights-profileclassifier-lambda" --tail
-```
-
-You can find more information and examples about filtering Lambda function logs in the [SAM CLI Documentation](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-logging.html).
-
-## Tests
-
-Tests are defined in the `tests` folder in this project. Use PIP to install the test dependencies and run tests.
-
-```bash
-pjinsights-profileclassifier-lambda$ pip install -r tests/requirements.txt --user
-# unit test
-pjinsights-profileclassifier-lambda$ python -m pytest tests/unit -v
-# integration test, requiring deploying the stack first.
-# Create the env variable AWS_SAM_STACK_NAME with the name of the stack we are testing
-pjinsights-profileclassifier-lambda$ AWS_SAM_STACK_NAME="pjinsights-profileclassifier-lambda" python -m pytest tests/integration -v
-```
-
-## Cleanup
-
-To delete the sample application that you created, use the AWS CLI. Assuming you used your project name for the stack name, you can run the following:
-
-```bash
-sam delete --stack-name "pjinsights-profileclassifier-lambda"
-```
-
-## Resources
-
-See the [AWS SAM developer guide](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/what-is-sam.html) for an introduction to SAM specification, the SAM CLI, and serverless application concepts.
-
-Next, you can use AWS Serverless Application Repository to deploy ready to use Apps that go beyond hello world samples and learn how authors developed their applications: [AWS Serverless Application Repository main page](https://aws.amazon.com/serverless/serverlessrepo/)
