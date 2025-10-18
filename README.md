@@ -1,7 +1,7 @@
 # pjinsights-profileclassifier-lambda
 
 ## Descrição
-- Função AWS Lambda da plataforma PJInsights que classifica empresas em diferentes momentos de vida (início, declínio, expansão e maturidade) através de um modelo de Machine Learning não supervisionado, previamente treinado com o algoritmo K-means.
+Função AWS Lambda da plataforma PJInsights que classifica empresas em diferentes momentos de vida (início, declínio, expansão e maturidade) através de um modelo de Machine Learning não supervisionado, previamente treinado com o algoritmo K-means.
 
 ![Arquitetura solução PJInsights](./assets/ArquiteturaPJInsights.png)
 
